@@ -35,6 +35,8 @@ genTable  = cms.EDProducer("SimpleGenEventFlatTableProducer",
         scalePDF = Var( "?hasPDF?pdf().scalePDF:-1", float, doc="Q2 scale for PDF", precision=14 ),
         binvar = Var("?hasBinningValues()?binningValues()[0]:-1", float, doc="MC generation binning value", precision=14),
         weight = Var("weight()", float,doc="MC generator weight", precision=14),
+        nMEPartons = Var( "nMEPartons()", int, doc="number of ME  parton", precision=6 ),
+        nMEPartonsFiltered = Var( "nMEPartonsFiltered", int, doc="number of ME  parton Filtered", precision=6 ),
         ),
 )
 

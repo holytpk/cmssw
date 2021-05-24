@@ -94,7 +94,7 @@ def customizeNanoGEN(process):
     process.patJetPartons.particles = "genParticles"
     process.particleLevel.src = "generatorSmeared"
 
-    process.genJetTable.src = "ak4GenJets"
+    process.genJetTable.src = "ak4GenJetsNoNu"
     process.genJetAK8Table.src = "ak8GenJets"
     process.tauGenJetsForNano.GenParticles = "genParticles"
     process.genVisTaus.srcGenParticles = "genParticles"

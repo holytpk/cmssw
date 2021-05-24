@@ -400,10 +400,11 @@ public:
     WCFit wcfit;
     std::string s_wcnames;
     for (auto & weight : lheProd.weights()){
-      if (weight.id.rfind("EFTrwgt",0)==0){
-         s_wcnames = (weight.id);
+      if (weight.id.rfind("EFTrwgt",0)==0 || weight.id.rfind("eftrwgt",0)==0){
+         if(weight.id.find("nlo")!= std::string::npos) s_wcnames = std::regex_replace(weight.id, std::regex("_nlo"), std::string(""));
+         else s_wcnames = (weight.id);
          nEFT++;
-         WCPoint wc = WCPoint(weight.id, weight.wgt);
+         WCPoint wc = WCPoint(s_wcnames, weight.wgt);
          vwc.push_back(wc);
       }
     }
@@ -436,9 +437,20 @@ public:
         wPDF[mPDF - pdfWeightIDs.begin()] = weight.wgt / w0;
 
       // xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+      std::string s_id;
+      int i_id;
       if (weight.id.rfind("EFTrwgt",0)==0){
-        std::string s_id = std::regex_replace(weight.id, std::regex("EFTrwgt[^0-9]*([0-9]+).*"), std::string("$1"));
-        int i_id = std::stoi(s_id);
+        if(weight.id.find("nlo")!= std::string::npos) s_id = std::regex_replace(weight.id, std::regex("_nlo"), std::string(""));
+        else s_id = weight.id;
+        s_id = std::regex_replace(s_id, std::regex("EFTrwgt[^0-9]*([0-9]+).*"), std::string("$1"));
+        i_id = std::stoi(s_id);
+        wEFT[i_id] = weight.wgt/w0;
+      }
+      if (weight.id.rfind("eftrwgt",0)==0){
+        if(weight.id.find("nlo")!= std::string::npos) s_id = std::regex_replace(weight.id, std::regex("_nlo"), std::string(""));
+        else s_id = weight.id;
+        s_id = std::regex_replace(s_id, std::regex("eftrwgt[^0-9]*([0-9]+).*"), std::string("$1"));
+        i_id = std::stoi(s_id);
         wEFT[i_id] = weight.wgt/w0;
       }
 
@@ -484,6 +496,12 @@ public:
                                     lheProd.originalXWGTUP(),
                                     "Nominal event weight in the LHE file",
                                     nanoaod::FlatTable::FloatColumn);
+    float djr1= (genProd.DJRValues().size() > 0) ? genProd.DJRValues().at(0) : -1.;
+    float djr2= (genProd.DJRValues().size() > 1) ? genProd.DJRValues().at(1) : -1.;
+    float djr3= (genProd.DJRValues().size() > 2) ? genProd.DJRValues().at(2) : -1.;
+    outNamed->addColumnValue<float>("DJR10", djr1,"djr 1 --> 0 (-1 if the value is not available)", nanoaod::FlatTable::FloatColumn);
+    outNamed->addColumnValue<float>("DJR21", djr2,"djr 2 --> 1 (-1 if the value is not available)", nanoaod::FlatTable::FloatColumn);
+    outNamed->addColumnValue<float>("DJR32", djr3,"djr 3 --> 2 (-1 if the value is not available)", nanoaod::FlatTable::FloatColumn);
     for (unsigned int i = 0, n = wNamed.size(); i < n; ++i) {
       outNamed->addColumnValue<float>(namedWeightLabels_[i],
                                       wNamed[i],
@@ -531,10 +549,15 @@ public:
     outPS = std::make_unique<nanoaod::FlatTable>(wPS.size(), "PSWeight", false);
     outPS->addColumn<float>("", wPS, psWeightsDocStr, nanoaod::FlatTable::FloatColumn,
                                     lheWeightPrecision_);
-
     outNamed = std::make_unique<nanoaod::FlatTable>(1, "LHEWeight", true);
     outNamed->addColumnValue<float>(
         "originalXWGTUP", originalXWGTUP, "Nominal event weight in the LHE file", nanoaod::FlatTable::FloatColumn);
+    float djr1= (genProd.DJRValues().size() > 0) ? genProd.DJRValues().at(0) : -1.;
+    float djr2= (genProd.DJRValues().size() > 1) ? genProd.DJRValues().at(1) : -1.;
+    float djr3= (genProd.DJRValues().size() > 2) ? genProd.DJRValues().at(2) : -1.;
+    outNamed->addColumnValue<float>("DJR10", djr1,"djr 1 --> 0 (-1 if the value is not available)", nanoaod::FlatTable::FloatColumn);
+    outNamed->addColumnValue<float>("DJR21", djr2,"djr 2 --> 1 (-1 if the value is not available)", nanoaod::FlatTable::FloatColumn);
+    outNamed->addColumnValue<float>("DJR32", djr3,"djr 3 --> 2 (-1 if the value is not available)", nanoaod::FlatTable::FloatColumn);
     /*for (unsigned int i = 0, n = wNamed.size(); i < n; ++i) {
       outNamed->addColumnValue<float>(namedWeightLabels_[i], wNamed[i], "LHE weight for id "+namedWeightIDs_[i]+", relative to nominal", nanoaod::FlatTable::FloatColumn, lheWeightPrecision_);
       }*/

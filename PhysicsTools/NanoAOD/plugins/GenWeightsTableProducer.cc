@@ -409,11 +409,8 @@ public:
     std::vector<int> wcnames;
     std::vector<std::string> wcnames_string;
 
-    std::vector<std::string> words;
-    split_string(s_wcnames,words,"_");
-    for (uint i = 1; i < words.size(); i+= 2) {
-      wcnames_string.push_back((words[i]));
-    } 
+    wcnames_string = wcfit.getNames(); 
+    wcnames_string.erase(wcnames_string.begin());
     wcnames = VectorStringToInt(wcnames_string);
 
     int nWC = wcnames.size();

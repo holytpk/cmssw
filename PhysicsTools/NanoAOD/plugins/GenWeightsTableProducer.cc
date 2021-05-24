@@ -14,9 +14,14 @@
 #include "FWCore/MessageLogger/interface/MessageLogger.h"
 #include "boost/algorithm/string.hpp"
 
-#include "PhysicsTools/NanoAOD/interface/WCPoint.h"
-#include "PhysicsTools/NanoAOD/interface/WCFit.h"
+
 #include "PhysicsTools/NanoAOD/interface/ConvertHex.h"
+
+// From https://github.com/TopEFT/EFTGenReader
+#include "EFTGenReader/EFTHelperUtilities/interface/WCPoint.h"
+#include "EFTGenReader/EFTHelperUtilities/interface/WCFit.h"
+//#include "PhysicsTools/NanoAOD/interface/WCPoint.h"
+//#include "PhysicsTools/NanoAOD/interface/WCFit.h"
 
 #include <memory>
 

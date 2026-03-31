@@ -253,6 +253,19 @@ namespace {
   };
 }  // namespace
 
+namespace {
+  inline bool isEFTWeightId(const std::string& id) {
+    return (id.rfind("EFTrwgt", 0) == 0 || id.rfind("eftrwgt", 0) == 0);
+  }
+
+  inline void addUniqueRwgtID(std::vector<std::string>& ids, const std::string& id) {
+    if (std::find(ids.begin(), ids.end(), id) == ids.end()) {
+      ids.emplace_back(id);
+    }
+  }
+} // Ling: helper function to find the matching LHERweihgtingWeight names 
+
+
 class GenWeightsTableProducer : public edm::global::EDProducer<edm::StreamCache<LumiCacheInfoHolder>,
                                                                edm::RunCache<DynamicWeightChoice>,
                                                                edm::RunSummaryCache<CounterMap>,
@@ -720,8 +733,16 @@ public:
               isFirstGroup = false;
               for (++iLine; iLine < nLines; ++iLine) {
                 if (lheDebug) {
-                  std::cout << "    " << lines[iLine];
+                  std::cout << "    " << lines[iLine];        
                 }
+                if (std::regex_search(lines[iLine], groups, rwgt)) {
+                  std::string rwgtID = groups.str(1);
+                  if (isEFTWeightId(rwgtID)) {
+                    if (lheDebug)
+                      std::cout << "    >>> EFT reweighting weight: " << rwgtID << std::endl;
+                    addUniqueRwgtID(lheReweighingIDs, rwgtID);
+                  }
+                 }    
                 if (std::regex_search(
                         lines[iLine], groups, ismg26x ? scalewmg26x : (ismg26xNew ? scalewmg26xNew : scalew))) {
                   if (lheDebug)
@@ -756,6 +777,14 @@ public:
               for (++iLine; iLine < nLines; ++iLine) {
                 if (lheDebug)
                   std::cout << "    " << lines[iLine];
+                if (std::regex_search(lines[iLine], groups, rwgt)) {
+                  std::string rwgtID = groups.str(1);
+                  if (isEFTWeightId(rwgtID)) {
+                    if (lheDebug)
+                      std::cout << "    >>> EFT reweighting weight: " << rwgtID << std::endl;
+                    addUniqueRwgtID(lheReweighingIDs, rwgtID);
+                  }
+                }    
                 if (std::regex_search(lines[iLine], groups, pdfw)) {
                   unsigned int lhaID = std::stoi(groups.str(2));
                   if (lheDebug)
@@ -789,6 +818,14 @@ public:
               for (++iLine; iLine < nLines; ++iLine) {
                 if (lheDebug)
                   std::cout << "    " << lines[iLine];
+                if (std::regex_search(lines[iLine], groups, rwgt)) {
+                  std::string rwgtID = groups.str(1);
+                  if (isEFTWeightId(rwgtID)) {
+                    if (lheDebug)
+                      std::cout << "    >>> EFT reweighting weight: " << rwgtID << std::endl;
+                    addUniqueRwgtID(lheReweighingIDs, rwgtID);
+                  }
+                }    
                 if (std::regex_search(lines[iLine], groups, pdfw)) {
                   unsigned int id = std::stoi(groups.str(1));
                   unsigned int lhaID = std::stoi(groups.str(2));
@@ -827,6 +864,14 @@ public:
               for (++iLine; iLine < nLines; ++iLine) {
                 if (lheDebug)
                   std::cout << "    " << lines[iLine];
+                if (std::regex_search(lines[iLine], groups, rwgt)) {
+                  std::string rwgtID = groups.str(1);
+                  if (isEFTWeightId(rwgtID)) {
+                    if (lheDebug)
+                      std::cout << "    >>> EFT reweighting weight: " << rwgtID << std::endl;
+                    addUniqueRwgtID(lheReweighingIDs, rwgtID);
+                  }
+                }    
                 if (std::regex_search(
                         lines[iLine], groups, ismg26x ? pdfwmg26x : (ismg26xNew ? pdfwmg26xNew : pdfwOld))) {
                   unsigned int member = 0;
@@ -881,10 +926,11 @@ public:
                   std::string rwgtID = groups.str(1);
                   if (lheDebug)
                     std::cout << "    >>> LHE reweighting weight: " << rwgtID << std::endl;
-                  if (std::find(lheReweighingIDs.begin(), lheReweighingIDs.end(), rwgtID) == lheReweighingIDs.end()) {
-                    // we're only interested in the beggining of the block
-                    lheReweighingIDs.emplace_back(rwgtID);
-                  }
+                  // if (std::find(lheReweighingIDs.begin(), lheReweighingIDs.end(), rwgtID) == lheReweighingIDs.end()) {
+                  //   // we're only interested in the beggining of the block
+                  //   lheReweighingIDs.emplace_back(rwgtID);
+                  // }
+                  addUniqueRwgtID(lheReweighingIDs, rwgtID); // Ling: adding this, commented out above 
                 } else if (std::regex_search(lines[iLine], endweightgroup)) {
                   if (lheDebug)
                     std::cout << ">>> Looks like the end of a weight group" << std::endl;
@@ -894,6 +940,15 @@ public:
               for (++iLine; iLine < nLines; ++iLine) {
                 if (lheDebug)
                   std::cout << "    " << lines[iLine];
+                if (std::regex_search(lines[iLine], groups, rwgt)) {
+                  std::string rwgtID = groups.str(1);
+                  if (isEFTWeightId(rwgtID)) {
+                    if (lheDebug)
+                      std::cout << "    >>> EFT reweighting weight: " << rwgtID << std::endl;
+                    addUniqueRwgtID(lheReweighingIDs, rwgtID);
+                  }
+                }
+    
                 if (std::regex_search(lines[iLine], groups, endweightgroup)) {
                   if (lheDebug)
                     std::cout << ">>> Looks like the end of a weight group" << std::endl;
@@ -925,10 +980,11 @@ public:
                   std::string rwgtID = groups.str(1);
                   if (lheDebug)
                     std::cout << "    >>> LHE reweighting weight: " << rwgtID << std::endl;
-                  if (std::find(lheReweighingIDs.begin(), lheReweighingIDs.end(), rwgtID) == lheReweighingIDs.end()) {
-                    // we're only interested in the beggining of the block
-                    lheReweighingIDs.emplace_back(rwgtID);
-                  }
+                  // if (std::find(lheReweighingIDs.begin(), lheReweighingIDs.end(), rwgtID) == lheReweighingIDs.end()) {
+                  //   // we're only interested in the beggining of the block
+                  //   lheReweighingIDs.emplace_back(rwgtID);
+                  // }
+                  addUniqueRwgtID(lheReweighingIDs, rwgtID); // Ling: again 
                 } else if (std::regex_search(lines[iLine], endweightgroup)) {
                   if (lheDebug)
                     std::cout << ">>> Looks like the end of a weight group" << std::endl;

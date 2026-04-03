@@ -646,14 +646,28 @@ public:
         false);  // make sure only the first thread dumps out this (even if may still be mixed up with other output, but nevermind)
     auto weightChoice = std::make_shared<DynamicWeightChoice>();
 
-    // getByToken throws since we're not in the endRun (see https://github.com/cms-sw/cmssw/pull/18499)
-    //if (iRun.getByToken(lheRunTag_, lheInfo)) {
+    // getByToken throws since we're not in the endRun
+    // (see https://github.com/cms-sw/cmssw/pull/18499),
+    // so try getByLabel defensively and fall back gracefully if the framework
+    // does not allow reading the Run product at this point.
     for (const auto& lheLabel : lheLabel_) {
-      iRun.getByLabel(lheLabel, lheInfo);
+      try {
+        iRun.getByLabel(lheLabel, lheInfo);
+      } catch (cms::Exception const& ex) {
+        edm::LogWarning("LHETablesProducer")
+            << "Could not read LHERunInfoProduct in globalBeginRun for label "
+            << lheLabel.encode()
+            << ". Will skip run-level LHE header parsing here and rely on "
+               "event-level LHEEventProduct information where available.\n"
+            << "Exception was:\n"
+            << ex.what();
+        continue;
+      }
       if (lheInfo.isValid()) {
         break;
       }
     }
+      
     if (lheInfo.isValid()) {
       std::vector<ScaleVarWeight> scaleVariationIDs;
       std::vector<PDFSetWeights> pdfSetWeightIDs;

@@ -462,15 +462,20 @@ public:
 
     std::vector<double> coefs;
     std::vector<int> wcnames;
+    std::vector<std::string> wcnames_string;
     int nCoef = 0;
     int nWC = 0;
     if (!vwc.empty()) {
       wcfit = WCFit(vwc, "wcfit");
       coefs = wcfit.getCoefficients();
       nCoef = coefs.size();
-      std::vector<std::string> wcnames_string = wcfit.getNames();
+      wcnames_string = wcfit.getNames();
       if (!wcnames_string.empty()) wcnames_string.erase(wcnames_string.begin());
-      wcnames = VectorStringToInt(wcnames_string);
+      wcnames.clear();
+      wcnames.reserve(wcnames_string.size());
+      for (size_t iwc = 0; iwc < wcnames_string.size(); ++iwc) {
+        wcnames.push_back(static_cast<int>(iwc));
+      }
       nWC = wcnames.size();
     }
 
@@ -558,7 +563,12 @@ public:
     }
 
     if (!wcnames.empty()) {
-      std::string WCnamDoc = "EFT WC names";
+      std::ostringstream wcDoc;
+      wcDoc << "EFT WC name indices";
+      for (size_t iwc = 0; iwc < wcnames_string.size(); ++iwc) {
+        wcDoc << "; [" << iwc << "]=" << wcnames_string[iwc];
+      }
+      std::string WCnamDoc = wcDoc.str();
       outWCnam.reset(new nanoaod::FlatTable(nWC, "WCnames", false));
       outWCnam->addColumn<int>("", wcnames, WCnamDoc, nanoaod::FlatTable::IntColumn, lheWeightPrecision_);
     } else {

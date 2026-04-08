@@ -300,11 +300,12 @@ namespace edm
         << "More than one LHERunInfoProduct present";
 
     if(counterRunInfoProducts_ == 0)
-      throw edm::Exception(errors::EventCorruption)
-        << "No LHERunInfoProduct present";
+      return;
 
     edm::Handle<LHERunInfoProduct> lheRunInfoProduct;
     run.getByLabel(runInfoProductTag_, lheRunInfoProduct);
+    if (!lheRunInfoProduct.isValid())
+      return;
     //TODO: fix so that this actually works with getByToken commented below...
     //run.getByToken(runInfoProductToken_, lheRunInfoProduct);
     

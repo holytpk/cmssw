@@ -263,7 +263,30 @@ namespace {
       ids.emplace_back(id);
     }
   }
-}  // namespace
+
+  inline std::string normalizeEFTToken(std::string x) {
+    if (!x.empty() && x[0] == 'm') {
+      x[0] = '-';
+    }
+    std::replace(x.begin(), x.end(), 'p', '.');
+    return x;
+  }
+
+  inline std::string sanitizeEFTrwgtIDForWCPoint(const std::string& raw) {
+    std::vector<std::string> words;
+    split_string(raw, words, "_");
+    if (words.empty()) return raw;
+
+    std::ostringstream out;
+    out << words[0];
+    for (size_t i = 1; i + 1 < words.size(); i += 2) {
+      out << "_" << words[i] << "_" << normalizeEFTToken(words[i + 1]);
+    }
+    return out.str();
+  }
+} // Ling: helper function to find the matching LHERweihgtingWeight names 
+
+
 class GenWeightsTableProducer : public edm::global::EDProducer<edm::StreamCache<LumiCacheInfoHolder>,
                                                                edm::RunCache<DynamicWeightChoice>,
                                                                edm::RunSummaryCache<CounterMap>,
@@ -336,15 +359,8 @@ public:
     std::unique_ptr<nanoaod::FlatTable> genPSTab;
 
     edm::Handle<LHEEventProduct> lheInfo;
-    
-    std::cerr << "[DEBUG GenWeightsTableProducer] produce(): start LHEEventProduct lookup" << std::endl;
     for (const auto& lheTag : lheTag_) {
-      std::cerr << "[DEBUG GenWeightsTableProducer] produce(): trying event-level LHE tag" << std::endl;
-
-      std::cerr << "[DEBUG GenWeightsTableProducer] produce(): before iEvent.getByToken" << std::endl;
       iEvent.getByToken(lheTag, lheInfo);
-      std::cerr << "[DEBUG GenWeightsTableProducer] produce(): after iEvent.getByToken valid=" << lheInfo.isValid() << std::endl;
-      std::cerr << "[DEBUG GenWeightsTableProducer] found valid LHERunInfoProduct" << std::endl;
       if (lheInfo.isValid()) {
         break;
       }
@@ -415,95 +431,51 @@ public:
 
     const std::vector<std::string>& scaleWeightIDs = weightChoice->scaleWeightIDs;
     const std::vector<std::string>& pdfWeightIDs = weightChoice->pdfWeightIDs;
-    std::cerr << "[DEBUG GenWeightsTableProducer] reached rwgtWeightIDs_ref assignment" << std::endl;
-    const std::vector<std::string>& rwgtWeightIDs_ref = weightChoice->rwgtIDs;
-    std::cerr << "[DEBUG GenWeightsTableProducer] weightChoice ptr=" << (void*)weightChoice << std::endl;
-    std::vector<std::string> rwgtWeightIDs_local;
-    const std::vector<std::string>* rwgtWeightIDs_ptr = &rwgtWeightIDs_ref;
-
-    if (rwgtWeightIDs_ref.empty()) {
-      std::cerr << "[DEBUG GenWeightsTableProducer] rwgtWeightIDs_ref is empty, building fallback from event-level weights" << std::endl;
-      for (const auto& weight : lheProd.weights()) {
-        addUniqueRwgtID(rwgtWeightIDs_local, weight.id);
-      }
-      std::cerr << "[DEBUG GenWeightsTableProducer] fallback rwgtWeightIDs_local size=" << rwgtWeightIDs_local.size() << std::endl;
-      for (size_t __i = 0; __i < rwgtWeightIDs_local.size() && __i < 8; ++__i) {
-        std::cerr << "[DEBUG GenWeightsTableProducer] fallback rwgt id[" << __i << "]=" << rwgtWeightIDs_local[__i] << std::endl;
-      }
-      rwgtWeightIDs_ptr = &rwgtWeightIDs_local;
-    }
-
-    const std::vector<std::string>& rwgtWeightIDs = *rwgtWeightIDs_ptr;
-
-    std::cerr << "[DEBUG GenWeightsTableProducer] produce(): lheProd weight count=" << lheProd.weights().size() << std::endl;
-    {
-      size_t __dbg_n = 0;
-      for (const auto& __dbg_w : lheProd.weights()) {
-        std::cerr << "[DEBUG GenWeightsTableProducer] produce(): weight[" << __dbg_n << "] id=" << __dbg_w.id << " wgt=" << __dbg_w.wgt << std::endl;
-        if (++__dbg_n >= 8) break;
+    std::vector<std::string> rwgtWeightIDs = weightChoice->rwgtIDs;
+    for (const auto& weight : lheProd.weights()) {
+      if (isEFTWeightId(weight.id)) {
+        addUniqueRwgtID(rwgtWeightIDs, weight.id);
       }
     }
 
     double w0 = lheProd.originalXWGTUP();
 
-    // ==================== IMPROVED EFT REWEIGHTING (long names support) ====================
+    // Count EFT weights, but do NOT try to build WCPoint/WCFit from raw EFTrwgt ids here.
+    // Raw ids like "EFTrwgt0_ctGIm_m0p936_..." can trigger std::stod inside WCPoint.
+    
+    int nEFT = 0;
     std::vector<WCPoint> vwc;
-    int nEFT_found = 0;
-
-    std::cerr << "[DEBUG GenWeightsTableProducer] about to inspect lheProd.weights()" << std::endl;
+    WCFit wcfit;
+    std::string s_wcnames;
     for (const auto& weight : lheProd.weights()) {
-      if (isEFTWeightId(weight.id)) {
-        nEFT_found++;
-
-        std::string clean_id = weight.id;
-
-        // Remove _nlo suffix if present
-        if (clean_id.find("_nlo") != std::string::npos)
-          clean_id = std::regex_replace(clean_id, std::regex("_nlo"), "");
-
-        // For long names like EFTrwgt0_ctGIm_m0p936_... keep only after first "_"
-        size_t pos = clean_id.find("_");
-        if (pos != std::string::npos)
-          clean_id = clean_id.substr(pos + 1);
-
-        std::vector<std::string> wc_tokens;
-        boost::split(wc_tokens, clean_id, boost::is_any_of("_"), boost::token_compress_on);
-
-        std::string wcpoint_id;
-        for (size_t i = 0; i + 1 < wc_tokens.size(); i += 2) {
-          if (wc_tokens[i].empty()) continue;
-          std::string val = wc_tokens[i + 1];
-          if (!val.empty() && val[0] == 'm') val[0] = '-';
-          for (auto& ch : val) {
-            if (ch == 'p') ch = '.';
-          }
-          if (!val.empty() && val.back() == '.') val += '0';
-          if (!wcpoint_id.empty()) wcpoint_id += "_";
-          wcpoint_id += wc_tokens[i] + "_" + val;
-        }
-
-        if (debug_) {
-          std::cout << "DEBUG EFT: raw='" << weight.id
-                    << "' -> clean='" << wcpoint_id
-                    << "' wgt=" << weight.wgt << std::endl;
-        }
-        vwc.emplace_back(std::string("EFTrwgt_") + wcpoint_id, weight.wgt);
+      if (weight.id.rfind("EFTrwgt",0)==0 || weight.id.rfind("eftrwgt",0)==0) {
+        if (weight.id.find("nlo") != std::string::npos)
+          s_wcnames = std::regex_replace(weight.id, std::regex("_nlo"), std::string(""));
+        else
+          s_wcnames = weight.id;
+        ++nEFT;
+        std::string wcpoint_id = sanitizeEFTrwgtIDForWCPoint(s_wcnames);
+        WCPoint wc(wcpoint_id, weight.wgt / w0);
+        vwc.push_back(wc);
       }
     }
-    WCFit wcfit(vwc, "wcfit");
-    std::vector<double> coefs = wcfit.getCoefficients();
-    int nCoef = coefs.size();
-    std::vector<std::string> wcnames_string = wcfit.getNames();
-    if (!wcnames_string.empty()) {
-      wcnames_string.erase(wcnames_string.begin()); // remove 'sm'
+
+    std::vector<double> coefs;
+    std::vector<int> wcnames;
+    int nCoef = 0;
+    int nWC = 0;
+    if (!vwc.empty()) {
+      wcfit = WCFit(vwc, "wcfit");
+      coefs = wcfit.getCoefficients();
+      nCoef = coefs.size();
+      std::vector<std::string> wcnames_string = wcfit.getNames();
+      if (!wcnames_string.empty()) wcnames_string.erase(wcnames_string.begin());
+      wcnames = VectorStringToInt(wcnames_string);
+      nWC = wcnames.size();
     }
-    std::vector<int> wcnames = VectorStringToInt(wcnames_string);
-    int nWC = wcnames.size();
-    // =====================================================================
 
-    std::vector<double> wScale(scaleWeightIDs.size(), 1), wPDF(pdfWeightIDs.size(), 1), wRwgt(rwgtWeightIDs.size(), 1), wNamed(namedWeightIDs_.size(), 1);
+    std::vector<double> wScale(scaleWeightIDs.size(), 1), wPDF(pdfWeightIDs.size(), 1), wRwgt(rwgtWeightIDs.size(), 1), wNamed(namedWeightIDs_.size(), 1), wEFT(nEFT, 1);
 
-    std::cerr << "[DEBUG GenWeightsTableProducer] about to inspect lheProd.weights()" << std::endl;
     for (auto& weight : lheProd.weights()) {
       if (lheDebug)
         printf("Weight  %+9.5f   rel %+9.5f   for id %s\n", weight.wgt, weight.wgt / w0, weight.id.c_str());
@@ -515,6 +487,39 @@ public:
       auto mPDF = std::find(pdfWeightIDs.begin(), pdfWeightIDs.end(), weight.id);
       if (mPDF != pdfWeightIDs.end())
         wPDF[mPDF - pdfWeightIDs.begin()] = weight.wgt / w0;
+
+      // xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+      std::string s_id;
+      int i_id;
+      if (weight.id.rfind("EFTrwgt",0)==0){
+        if(weight.id.find("nlo")!= std::string::npos) s_id = std::regex_replace(weight.id, std::regex("_nlo"), std::string(""));
+        else s_id = weight.id;
+        s_id = std::regex_replace(s_id, std::regex("EFTrwgt[^0-9]*([0-9]+).*"), std::string("$1"));
+        i_id = std::stoi(s_id);
+        if (i_id >= 0 && static_cast<size_t>(i_id) < wEFT.size()) {
+          wEFT[i_id] = weight.wgt / w0;
+        } else if (lheDebug) {
+          edm::LogWarning("LHETablesProducer")
+              << "Skipping EFT weight with parsed index " << i_id
+              << " because wEFT has size " << wEFT.size()
+              << " for raw id " << weight.id;
+        }
+      }
+      if (weight.id.rfind("eftrwgt",0)==0){
+        if(weight.id.find("nlo")!= std::string::npos) s_id = std::regex_replace(weight.id, std::regex("_nlo"), std::string(""));
+        else s_id = weight.id;
+        s_id = std::regex_replace(s_id, std::regex("eftrwgt[^0-9]*([0-9]+).*"), std::string("$1"));
+        i_id = std::stoi(s_id);
+        if (i_id >= 0 && static_cast<size_t>(i_id) < wEFT.size()) {
+          wEFT[i_id] = weight.wgt / w0;
+        } else if (lheDebug) {
+          edm::LogWarning("LHETablesProducer")
+              << "Skipping EFT weight with parsed index " << i_id
+              << " because wEFT has size " << wEFT.size()
+              << " for raw id " << weight.id;
+        }
+      }
+
       auto mRwgt = std::find(rwgtWeightIDs.begin(), rwgtWeightIDs.end(), weight.id);
       if (mRwgt != rwgtWeightIDs.end())
         wRwgt[mRwgt - rwgtWeightIDs.begin()] = weight.wgt / w0;
@@ -544,13 +549,21 @@ public:
         "", wRwgt, weightChoice->rwgtWeightDoc, nanoaod::FlatTable::FloatColumn, lheWeightPrecision_);
 
     // xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-    std::string EFTcoefDoc = "EFT fit coefficients";
-    outEFT.reset(new nanoaod::FlatTable(nCoef, "EFTfitCoefficients", false));
-    outEFT->addColumn<float>("", coefs, EFTcoefDoc, nanoaod::FlatTable::FloatColumn, lheWeightPrecision_);
+    if (!coefs.empty()) {
+      std::string EFTcoefDoc = "EFT fit coefficients";
+      outEFT.reset(new nanoaod::FlatTable(nCoef, "EFTfitCoefficients", false));
+      outEFT->addColumn<float>("", coefs, EFTcoefDoc, nanoaod::FlatTable::FloatColumn, lheWeightPrecision_);
+    } else {
+      outEFT.reset(new nanoaod::FlatTable(0, "EFTfitCoefficients", false));
+    }
 
-    std::string WCnamDoc = "EFT WC names";
-    outWCnam.reset(new nanoaod::FlatTable(nWC, "WCnames", false));
-    outWCnam->addColumn<int>("", wcnames, WCnamDoc, nanoaod::FlatTable::IntColumn, lheWeightPrecision_);
+    if (!wcnames.empty()) {
+      std::string WCnamDoc = "EFT WC names";
+      outWCnam.reset(new nanoaod::FlatTable(nWC, "WCnames", false));
+      outWCnam->addColumn<int>("", wcnames, WCnamDoc, nanoaod::FlatTable::IntColumn, lheWeightPrecision_);
+    } else {
+      outWCnam.reset(new nanoaod::FlatTable(0, "WCnames", false));
+    }
 
     outNamed = std::make_unique<nanoaod::FlatTable>(1, "LHEWeight", true);
     outNamed->addColumnValue<float>("originalXWGTUP",
@@ -687,18 +700,467 @@ public:
   }
 
   // create an empty counter
-  std::shared_ptr<DynamicWeightChoice> globalBeginRun(edm::Run const&, edm::EventSetup const&) const override {
-    std::cerr << "[DEBUG GenWeightsTableProducer] enter globalBeginRun" << std::endl;
-    auto weightChoice = std::make_shared<DynamicWeightChoice>();
-    bool lheDebug = debugRun_.exchange(false);
+  std::shared_ptr<DynamicWeightChoice> globalBeginRun(edm::Run const& iRun, edm::EventSetup const&) const override {
+    edm::Handle<LHERunInfoProduct> lheInfo;
 
-    // In single-process ExternalLHEProducer workflows, reading
-    // LHERunInfoProduct here can trigger a beginRun LogicError.
-    // Rely on event-level LHEEventProduct in produce() instead.
-    if (lheDebug) {
-      edm::LogInfo("LHETablesProducer")
-          << "Skipping run-level LHERunInfoProduct parsing in globalBeginRun; "
-          << "will rely on event-level LHEEventProduct instead.";
+    bool lheDebug = debugRun_.exchange(
+        false);  // make sure only the first thread dumps out this (even if may still be mixed up with other output, but nevermind)
+    auto weightChoice = std::make_shared<DynamicWeightChoice>();
+    bool foundRunInfo = false;  
+
+    // getByToken throws since we're not in the endRun
+    // (see https://github.com/cms-sw/cmssw/pull/18499),
+    // so try getByLabel defensively and fall back gracefully if the framework
+    // does not allow reading the Run product at this point.
+    for (const auto& lheLabel : lheLabel_) {
+      try {
+        iRun.getByLabel(lheLabel, lheInfo);
+      } catch (cms::Exception const& ex) {
+        edm::LogWarning("LHETablesProducer")
+            << "Could not read LHERunInfoProduct in globalBeginRun for label "
+            << lheLabel.encode()
+            << ". This can happen in single-process ExternalLHEProducer workflows. "
+            << "Will skip run-level LHE header parsing for this run and rely on "
+               "event-level LHEEventProduct information where available.\n"
+            << "Exception was:\n"
+            << ex.what();
+        continue;
+      }
+      if (lheInfo.isValid()) {
+          foundRunInfo = true;
+        break;
+      }
+    }
+
+    // In ExternalLHEProducer-in-the-same-process workflows, beginRun may happen
+    // before the LHERunInfoProduct is fully available. Do not try to parse
+    // headers in that case; just return an empty choice and let produce()
+    // fall back to event-level LHEEventProduct handling.
+    if (!foundRunInfo || !lheInfo.isValid()) {
+      if (lheDebug) {
+        edm::LogInfo("LHETablesProducer")
+            << "No valid LHERunInfoProduct available in globalBeginRun; "
+            << "returning empty DynamicWeightChoice.";
+      }
+      return weightChoice;
+    }
+      
+    if (lheInfo.isValid()) {
+      std::vector<ScaleVarWeight> scaleVariationIDs;
+      std::vector<PDFSetWeights> pdfSetWeightIDs;
+      std::vector<std::string> lheReweighingIDs;
+      bool isFirstGroup = true;
+
+      std::regex weightgroupmg26x("<weightgroup\\s+(?:name|type)=\"(.*)\"\\s+combine=\"(.*)\"\\s*>");
+      std::regex weightgroup("<weightgroup\\s+combine=\"(.*)\"\\s+(?:name|type)=\"(.*)\"\\s*>");
+      std::regex weightgroupRwgt("<weightgroup\\s+(?:name|type)=\"(.*)\"\\s*>");
+      std::regex endweightgroup("</weightgroup>");
+      std::regex scalewmg26x(
+          "<weight\\s+(?:.*\\s+)?id=\"(\\d+)\"\\s*(?:lhapdf=\\d+|dyn=\\s*-?\\d+)?\\s*((?:[mM][uU][rR]|renscfact)=\"("
+          "\\S+)\"\\s+(?:[mM][uU][Ff]|facscfact)=\"(\\S+)\")(\\s+.*)?</weight>");
+      std::regex scalewmg26xNew(
+          "<weight\\s*((?:[mM][uU][fF]|facscfact)=\"(\\S+)\"\\s+(?:[mM][uU][Rr]|renscfact)=\"(\\S+)\").+id=\"(\\d+)\"(."
+          "*)?</weight>");
+
+      //<weight MUF="1.0" MUR="2.0" PDF="306000" id="1006"> MUR=2.0  </weight>
+      std::regex scalew(
+          "<weight\\s+(?:.*\\s+)?id=\"(\\d+|\\d+-NNLOPS)\">\\s*(?:lhapdf=\\d+|dyn=\\s*-?\\d+)?\\s*((?:mu[rR]|renscfact)"
+          "=(\\S+)\\s+(?:mu[Ff]|facscfact)=(\\S+)(\\s+.*)?)</weight>");
+      std::regex pdfw(
+          "<weight\\s+id=\"(\\d+)\">\\s*(?:PDF set|lhapdf|PDF|pdfset)\\s*=\\s*(\\d+)\\s*(?:\\s.*)?</weight>");
+      std::regex pdfwOld("<weight\\s+(?:.*\\s+)?id=\"(\\d+)\">\\s*Member \\s*(\\d+)\\s*(?:.*)</weight>");
+      std::regex pdfwmg26x(
+          "<weight\\s+id=\"(\\d+)\"\\s*MUR=\"(?:\\S+)\"\\s*MUF=\"(?:\\S+)\"\\s*(?:PDF "
+          "set|lhapdf|PDF|pdfset)\\s*=\\s*\"(\\d+)\"\\s*>\\s*(?:PDF=(\\d+)\\s*MemberID=(\\d+))?\\s*(?:\\s.*)?</"
+          "weight>");
+      //<weightgroup combine="symmhessian+as" name="NNPDF31_nnlo_as_0118_mc_hessian_pdfas">
+
+      //<weight MUF="1.0" MUR="1.0" PDF="325300" id="1048"> PDF=325300 MemberID=0 </weight>
+      std::regex pdfwmg26xNew(
+          "<weight\\s+MUF=\"(?:\\S+)\"\\s*MUR=\"(?:\\S+)\"\\s*PDF=\"(?:\\S+)\"\\s*id=\"(\\S+)\"\\s*>"
+          "\\s*(?:PDF=(\\d+)\\s*MemberID=(\\d+))?\\s*(?:\\s.*)?</"
+          "weight>");
+
+      std::regex rwgt("<weight\\s+id=\"(.+)\">(.+)?(</weight>)?");
+      std::smatch groups;
+      for (auto iter = lheInfo->headers_begin(), end = lheInfo->headers_end(); iter != end; ++iter) {
+        if (iter->tag() != "initrwgt") {
+          if (lheDebug)
+            std::cout << "Skipping LHE header with tag" << iter->tag() << std::endl;
+          continue;
+        }
+        if (lheDebug)
+          std::cout << "Found LHE header with tag" << iter->tag() << std::endl;
+        std::vector<std::string> lines = iter->lines();
+        bool missed_weightgroup =
+            false;  //Needed because in some of the samples ( produced with MG26X ) a small part of the header info is ordered incorrectly
+        bool ismg26x = false;
+        bool ismg26xNew = false;
+        for (unsigned int iLine = 0, nLines = lines.size(); iLine < nLines;
+             ++iLine) {  //First start looping through the lines to see which weightgroup pattern is matched
+          boost::replace_all(lines[iLine], "&lt;", "<");
+          boost::replace_all(lines[iLine], "&gt;", ">");
+          if (std::regex_search(lines[iLine], groups, weightgroupmg26x)) {
+            ismg26x = true;
+          } else if (std::regex_search(lines[iLine], groups, scalewmg26xNew) ||
+                     std::regex_search(lines[iLine], groups, pdfwmg26xNew)) {
+            ismg26xNew = true;
+          }
+        }
+        for (unsigned int iLine = 0, nLines = lines.size(); iLine < nLines; ++iLine) {
+          if (lheDebug)
+            std::cout << lines[iLine];
+          if (std::regex_search(lines[iLine], groups, ismg26x ? weightgroupmg26x : weightgroup)) {
+            std::string groupname = groups.str(2);
+            if (ismg26x)
+              groupname = groups.str(1);
+            if (lheDebug)
+              std::cout << ">>> Looks like the beginning of a weight group for '" << groupname << "'" << std::endl;
+            if (groupname.find("scale_variation") == 0 || groupname == "Central scale variation" || isFirstGroup) {
+              if (lheDebug && groupname.find("scale_variation") != 0 && groupname != "Central scale variation")
+                std::cout << ">>> First weight is not scale variation, but assuming is the Central Weight" << std::endl;
+              else if (lheDebug)
+                std::cout << ">>> Looks like scale variation for theory uncertainties" << std::endl;
+              isFirstGroup = false;
+              for (++iLine; iLine < nLines; ++iLine) {
+                if (lheDebug) {
+                  std::cout << "    " << lines[iLine];        
+                }
+                if (std::regex_search(lines[iLine], groups, rwgt)) {
+                  std::string rwgtID = groups.str(1);
+                  if (isEFTWeightId(rwgtID)) {
+                    if (lheDebug)
+                      std::cout << "    >>> EFT reweighting weight: " << rwgtID << std::endl;
+                    addUniqueRwgtID(lheReweighingIDs, rwgtID);
+                  }
+                 }    
+                if (std::regex_search(
+                        lines[iLine], groups, ismg26x ? scalewmg26x : (ismg26xNew ? scalewmg26xNew : scalew))) {
+                  if (lheDebug)
+                    std::cout << "    >>> Scale weight " << groups[1].str() << " for " << groups[3].str() << " , "
+                              << groups[4].str() << " , " << groups[5].str() << std::endl;
+                  if (ismg26xNew) {
+                    scaleVariationIDs.emplace_back(groups.str(4), groups.str(1), groups.str(3), groups.str(2));
+                  } else {
+                    scaleVariationIDs.emplace_back(groups.str(1), groups.str(2), groups.str(3), groups.str(4));
+                  }
+                } else if (std::regex_search(lines[iLine], endweightgroup)) {
+                  if (lheDebug)
+                    std::cout << ">>> Looks like the end of a weight group" << std::endl;
+                  if (!missed_weightgroup) {
+                    break;
+                  } else
+                    missed_weightgroup = false;
+                } else if (std::regex_search(lines[iLine], ismg26x ? weightgroupmg26x : weightgroup)) {
+                  if (lheDebug)
+                    std::cout << ">>> Looks like the beginning of a new weight group, I will assume I missed the end "
+                                 "of the group."
+                              << std::endl;
+                  if (ismg26x || ismg26xNew)
+                    missed_weightgroup = true;
+                  --iLine;  // rewind by one, and go back to the outer loop
+                  break;
+                }
+              }
+            } else if (groupname == "PDF_variation" || groupname.find("PDF_variation ") == 0) {
+              if (lheDebug)
+                std::cout << ">>> Looks like a new-style block of PDF weights for one or more pdfs" << std::endl;
+              for (++iLine; iLine < nLines; ++iLine) {
+                if (lheDebug)
+                  std::cout << "    " << lines[iLine];
+                if (std::regex_search(lines[iLine], groups, rwgt)) {
+                  std::string rwgtID = groups.str(1);
+                  if (isEFTWeightId(rwgtID)) {
+                    if (lheDebug)
+                      std::cout << "    >>> EFT reweighting weight: " << rwgtID << std::endl;
+                    addUniqueRwgtID(lheReweighingIDs, rwgtID);
+                  }
+                }    
+                if (std::regex_search(lines[iLine], groups, pdfw)) {
+                  unsigned int lhaID = std::stoi(groups.str(2));
+                  if (lheDebug)
+                    std::cout << "    >>> PDF weight " << groups.str(1) << " for " << groups.str(2) << " = " << lhaID
+                              << std::endl;
+                  if (pdfSetWeightIDs.empty() || !pdfSetWeightIDs.back().maybe_add(groups.str(1), lhaID)) {
+                    pdfSetWeightIDs.emplace_back(groups.str(1), lhaID);
+                  }
+                } else if (std::regex_search(lines[iLine], endweightgroup)) {
+                  if (lheDebug)
+                    std::cout << ">>> Looks like the end of a weight group" << std::endl;
+                  if (!missed_weightgroup) {
+                    break;
+                  } else
+                    missed_weightgroup = false;
+                } else if (std::regex_search(lines[iLine], ismg26x ? weightgroupmg26x : weightgroup)) {
+                  if (lheDebug)
+                    std::cout << ">>> Looks like the beginning of a new weight group, I will assume I missed the end "
+                                 "of the group."
+                              << std::endl;
+                  if (ismg26x || ismg26xNew)
+                    missed_weightgroup = true;
+                  --iLine;  // rewind by one, and go back to the outer loop
+                  break;
+                }
+              }
+            } else if (groupname == "PDF_variation1" || groupname == "PDF_variation2") {
+              if (lheDebug)
+                std::cout << ">>> Looks like a new-style block of PDF weights for multiple pdfs" << std::endl;
+              unsigned int lastid = 0;
+              for (++iLine; iLine < nLines; ++iLine) {
+                if (lheDebug)
+                  std::cout << "    " << lines[iLine];
+                if (std::regex_search(lines[iLine], groups, rwgt)) {
+                  std::string rwgtID = groups.str(1);
+                  if (isEFTWeightId(rwgtID)) {
+                    if (lheDebug)
+                      std::cout << "    >>> EFT reweighting weight: " << rwgtID << std::endl;
+                    addUniqueRwgtID(lheReweighingIDs, rwgtID);
+                  }
+                }    
+                if (std::regex_search(lines[iLine], groups, pdfw)) {
+                  unsigned int id = std::stoi(groups.str(1));
+                  unsigned int lhaID = std::stoi(groups.str(2));
+                  if (lheDebug)
+                    std::cout << "    >>> PDF weight " << groups.str(1) << " for " << groups.str(2) << " = " << lhaID
+                              << std::endl;
+                  if (id != (lastid + 1) || pdfSetWeightIDs.empty()) {
+                    pdfSetWeightIDs.emplace_back(groups.str(1), lhaID);
+                  } else {
+                    pdfSetWeightIDs.back().add(groups.str(1), lhaID);
+                  }
+                  lastid = id;
+                } else if (std::regex_search(lines[iLine], endweightgroup)) {
+                  if (lheDebug)
+                    std::cout << ">>> Looks like the end of a weight group" << std::endl;
+                  if (!missed_weightgroup) {
+                    break;
+                  } else
+                    missed_weightgroup = false;
+                } else if (std::regex_search(lines[iLine], ismg26x ? weightgroupmg26x : weightgroup)) {
+                  if (lheDebug)
+                    std::cout << ">>> Looks like the beginning of a new weight group, I will assume I missed the end "
+                                 "of the group."
+                              << std::endl;
+                  if (ismg26x || ismg26xNew)
+                    missed_weightgroup = true;
+                  --iLine;  // rewind by one, and go back to the outer loop
+                  break;
+                }
+              }
+            } else if (lhaNameToID_.find(groupname) != lhaNameToID_.end()) {
+              if (lheDebug)
+                std::cout << ">>> Looks like an old-style PDF weight for an individual pdf" << std::endl;
+              unsigned int firstLhaID = lhaNameToID_.find(groupname)->second;
+              bool first = true;
+              for (++iLine; iLine < nLines; ++iLine) {
+                if (lheDebug)
+                  std::cout << "    " << lines[iLine];
+                if (std::regex_search(lines[iLine], groups, rwgt)) {
+                  std::string rwgtID = groups.str(1);
+                  if (isEFTWeightId(rwgtID)) {
+                    if (lheDebug)
+                      std::cout << "    >>> EFT reweighting weight: " << rwgtID << std::endl;
+                    addUniqueRwgtID(lheReweighingIDs, rwgtID);
+                  }
+                }    
+                if (std::regex_search(
+                        lines[iLine], groups, ismg26x ? pdfwmg26x : (ismg26xNew ? pdfwmg26xNew : pdfwOld))) {
+                  unsigned int member = 0;
+                  if (!ismg26x && !ismg26xNew) {
+                    member = std::stoi(groups.str(2));
+                  } else if (ismg26xNew) {
+                    if (!groups.str(3).empty()) {
+                      member = std::stoi(groups.str(3));
+                    }
+                  } else {
+                    if (!groups.str(4).empty()) {
+                      member = std::stoi(groups.str(4));
+                    }
+                  }
+                  unsigned int lhaID = member + firstLhaID;
+                  if (lheDebug)
+                    std::cout << "    >>> PDF weight " << groups.str(1) << " for " << member << " = " << lhaID
+                              << std::endl;
+                  //if (member == 0) continue; // let's keep also the central value for now
+                  if (first) {
+                    pdfSetWeightIDs.emplace_back(groups.str(1), lhaID);
+                    first = false;
+                  } else {
+                    pdfSetWeightIDs.back().add(groups.str(1), lhaID);
+                  }
+                } else if (std::regex_search(lines[iLine], endweightgroup)) {
+                  if (lheDebug)
+                    std::cout << ">>> Looks like the end of a weight group" << std::endl;
+                  if (!missed_weightgroup) {
+                    break;
+                  } else
+                    missed_weightgroup = false;
+                } else if (std::regex_search(lines[iLine], ismg26x ? weightgroupmg26x : weightgroup)) {
+                  if (lheDebug)
+                    std::cout << ">>> Looks like the beginning of a new weight group, I will assume I missed the end "
+                                 "of the group."
+                              << std::endl;
+                  if (ismg26x || ismg26xNew)
+                    missed_weightgroup = true;
+                  --iLine;  // rewind by one, and go back to the outer loop
+                  break;
+                }
+              }
+            } else if (groupname == "mass_variation" || groupname == "sthw2_variation" ||
+                       groupname == "width_variation") {
+              if (lheDebug)
+                std::cout << ">>> Looks like an EW parameter weight" << std::endl;
+              for (++iLine; iLine < nLines; ++iLine) {
+                if (lheDebug)
+                  std::cout << "    " << lines[iLine];
+                if (std::regex_search(lines[iLine], groups, rwgt)) {
+                  std::string rwgtID = groups.str(1);
+                  if (lheDebug)
+                    std::cout << "    >>> LHE reweighting weight: " << rwgtID << std::endl;
+                  // if (std::find(lheReweighingIDs.begin(), lheReweighingIDs.end(), rwgtID) == lheReweighingIDs.end()) {
+                  //   // we're only interested in the beggining of the block
+                  //   lheReweighingIDs.emplace_back(rwgtID);
+                  // }
+                  addUniqueRwgtID(lheReweighingIDs, rwgtID); // Ling: adding this, commented out above 
+                } else if (std::regex_search(lines[iLine], endweightgroup)) {
+                  if (lheDebug)
+                    std::cout << ">>> Looks like the end of a weight group" << std::endl;
+                }
+              }
+            } else {
+              for (++iLine; iLine < nLines; ++iLine) {
+                if (lheDebug)
+                  std::cout << "    " << lines[iLine];
+                if (std::regex_search(lines[iLine], groups, rwgt)) {
+                  std::string rwgtID = groups.str(1);
+                  if (isEFTWeightId(rwgtID)) {
+                    if (lheDebug)
+                      std::cout << "    >>> EFT reweighting weight: " << rwgtID << std::endl;
+                    addUniqueRwgtID(lheReweighingIDs, rwgtID);
+                  }
+                }
+    
+                if (std::regex_search(lines[iLine], groups, endweightgroup)) {
+                  if (lheDebug)
+                    std::cout << ">>> Looks like the end of a weight group" << std::endl;
+                  if (!missed_weightgroup) {
+                    break;
+                  } else
+                    missed_weightgroup = false;
+                } else if (std::regex_search(lines[iLine], ismg26x ? weightgroupmg26x : weightgroup)) {
+                  if (lheDebug)
+                    std::cout << ">>> Looks like the beginning of a new weight group, I will assume I missed the end "
+                                 "of the group."
+                              << std::endl;
+                  if (ismg26x || ismg26xNew)
+                    missed_weightgroup = true;
+                  --iLine;  // rewind by one, and go back to the outer loop
+                  break;
+                }
+              }
+            }
+          } else if (std::regex_search(lines[iLine], groups, weightgroupRwgt)) {
+            std::string groupname = groups.str(1);
+            if (groupname == "mg_reweighting") {
+              if (lheDebug)
+                std::cout << ">>> Looks like a LHE weights for reweighting" << std::endl;
+              for (++iLine; iLine < nLines; ++iLine) {
+                if (lheDebug)
+                  std::cout << "    " << lines[iLine];
+                if (std::regex_search(lines[iLine], groups, rwgt)) {
+                  std::string rwgtID = groups.str(1);
+                  if (lheDebug)
+                    std::cout << "    >>> LHE reweighting weight: " << rwgtID << std::endl;
+                  // if (std::find(lheReweighingIDs.begin(), lheReweighingIDs.end(), rwgtID) == lheReweighingIDs.end()) {
+                  //   // we're only interested in the beggining of the block
+                  //   lheReweighingIDs.emplace_back(rwgtID);
+                  // }
+                  addUniqueRwgtID(lheReweighingIDs, rwgtID); // Ling: again 
+                } else if (std::regex_search(lines[iLine], endweightgroup)) {
+                  if (lheDebug)
+                    std::cout << ">>> Looks like the end of a weight group" << std::endl;
+                  if (!missed_weightgroup) {
+                    break;
+                  } else
+                    missed_weightgroup = false;
+                } else if (std::regex_search(lines[iLine], ismg26x ? weightgroupmg26x : weightgroup)) {
+                  if (lheDebug)
+                    std::cout << ">>> Looks like the beginning of a new weight group, I will assume I missed the end "
+                                 "of the group."
+                              << std::endl;
+                  if (ismg26x)
+                    missed_weightgroup = true;
+                  --iLine;  // rewind by one, and go back to the outer loop
+                  break;
+                }
+              }
+            }
+          }
+        }
+        //std::cout << "============= END [ " << iter->tag() << " ] ============ \n\n" << std::endl;
+
+        // ----- SCALE VARIATIONS -----
+        std::sort(scaleVariationIDs.begin(), scaleVariationIDs.end());
+        if (lheDebug)
+          std::cout << "Found " << scaleVariationIDs.size() << " scale variations: " << std::endl;
+        std::stringstream scaleDoc;
+        scaleDoc << "LHE scale variation weights (w_var / w_nominal); ";
+        for (unsigned int isw = 0, nsw = scaleVariationIDs.size(); isw < nsw; ++isw) {
+          const auto& sw = scaleVariationIDs[isw];
+          if (isw)
+            scaleDoc << "; ";
+          scaleDoc << "[" << isw << "] is " << sw.label;
+          weightChoice->scaleWeightIDs.push_back(sw.wid);
+          if (lheDebug)
+            printf("    id %s: scales ren = % .2f  fact = % .2f  text = %s\n",
+                   sw.wid.c_str(),
+                   sw.scales.first,
+                   sw.scales.second,
+                   sw.label.c_str());
+        }
+        if (!scaleVariationIDs.empty())
+          weightChoice->scaleWeightsDoc = scaleDoc.str();
+
+        // ------ PDF VARIATIONS (take the preferred one) -----
+        if (lheDebug) {
+          std::cout << "Found " << pdfSetWeightIDs.size() << " PDF set errors: " << std::endl;
+          for (const auto& pw : pdfSetWeightIDs)
+            printf("lhaIDs %6d - %6d (%3lu weights: %s, ... )\n",
+                   pw.lhaIDs.first,
+                   pw.lhaIDs.second,
+                   pw.wids.size(),
+                   pw.wids.front().c_str());
+        }
+
+        // ------ LHE REWEIGHTING -------
+        if (lheDebug) {
+          std::cout << "Found " << lheReweighingIDs.size() << " reweighting weights" << std::endl;
+        }
+        std::copy(lheReweighingIDs.begin(), lheReweighingIDs.end(), std::back_inserter(weightChoice->rwgtIDs));
+
+        std::stringstream pdfDoc;
+        pdfDoc << "LHE pdf variation weights (w_var / w_nominal) for LHA IDs ";
+        bool found = false;
+        for (const auto& pw : pdfSetWeightIDs) {
+          for (uint32_t lhaid : preferredPDFLHAIDs_) {
+            if (pw.lhaIDs.first != lhaid && pw.lhaIDs.first != (lhaid + 1))
+              continue;  // sometimes the first weight is not saved if that PDF is the nominal one for the sample
+            if (pw.wids.size() == 1)
+              continue;  // only consider error sets
+            pdfDoc << pw.lhaIDs.first << " - " << pw.lhaIDs.second;
+            weightChoice->pdfWeightIDs = pw.wids;
+            if (maxPdfWeights_ < pw.wids.size()) {
+              weightChoice->pdfWeightIDs.resize(maxPdfWeights_);  // drop some replicas
+              pdfDoc << ", truncated to the first " << maxPdfWeights_ << " replicas";
+            }
+            weightChoice->pdfWeightsDoc = pdfDoc.str();
+            found = true;
+            break;
+          }
+          if (found)
+            break;
+        }
+      }
     }
     return weightChoice;
   }
